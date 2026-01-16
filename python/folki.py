@@ -3,8 +3,21 @@ from rank import rank_inf as rank_filter_inf
 from rank import rank_sup as rank_filter_sup
 from PIL import Image
 from primitive import *
-from adapthist import *
+
 import scipy
+
+
+
+from skimage.exposure import equalize_adapthist
+def clahe_local(img, tiles=8, clip=1.0, nbins=256):
+    img = img.astype(np.float32)
+    ptp = img.max() - img.min()
+    if ptp < 1e-12:
+        return np.zeros_like(img)
+    img = (img - img.min()) / ptp
+    return equalize_adapthist(img,kernel_size=(tiles, tiles),clip_limit=clip,nbins=nbins)
+
+
 
 
 def conv2SepMatlabbis(I, fen):
@@ -126,8 +139,8 @@ def GEFolkiIter(I0, I1, iteration=5, radius=[8, 4], rank=4, uinit=None, vinit=No
 
     toto = toto*255
     toto = toto.astype(np.uint8)
-    H0 = equalize_adapthist(toto, 8, clip_limit=1, nbins=256)
-
+    
+    H0 = clahe_local(toto, tiles=8, clip=1.0, nbins=256)
     if res_x > 0 or res_y > 0:
         H0 = resize(H0, (y, x), order=1)
 
@@ -149,8 +162,7 @@ def GEFolkiIter(I0, I1, iteration=5, radius=[8, 4], rank=4, uinit=None, vinit=No
 
     toto = toto*255
     toto = toto.astype(np.uint8)
-    H1 = equalize_adapthist(toto, 8, clip_limit=1, nbins=256)
-
+    H1 = clahe_local(toto, tiles=8, clip=1.0, nbins=256)
     if res_x > 0 or res_y > 0:
         H1 = resize(H1, (y, x), order=1)
 
