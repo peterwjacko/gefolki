@@ -1,0 +1,5 @@
+# Sample data is downloaded by fetch.py, not stored in git.
+*
+!.gitignore
+!README.md
+!fetch.py

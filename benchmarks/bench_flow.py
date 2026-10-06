@@ -20,7 +20,10 @@ DATA = Path(__file__).resolve().parents[1] / "datasets"
 
 
 def make_pair(n: int) -> tuple[np.ndarray, np.ndarray]:
-    with rasterio.open(DATA / "radar_bandep.png") as ds:
+    path = DATA / "radar_bandep.png"
+    if not path.is_file():
+        raise SystemExit(f"{path} missing: run `python datasets/fetch.py radar_bandep.png`")
+    with rasterio.open(path) as ds:
         img = ds.read(1).astype(np.float32)
     reps = -(-n // min(img.shape))
     master = np.pad(img, [(0, reps * s - s) for s in img.shape], mode="reflect")[:n, :n]
