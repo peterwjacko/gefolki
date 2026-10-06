@@ -240,7 +240,7 @@ uv run python benchmarks/bench_flow.py --size 2048 --variant gefolki efolki
 ```
 
 Test markers: `gpu` (needs CuPy and a GPU), `slow`, `data` (private Liffey airborne data,
-found through `GEFOLKI_LIFFEY_DATA`; skipped when absent). CI runs ruff and
+found through `GEFOLKI_LIFFEY_DATA`, full RGB ortho via `GEFOLKI_LIFFEY_RGB`; skipped when absent). CI runs ruff and
 `pytest -m "not gpu"` on Python 3.12 and 3.13. Sample data used by tests and examples is in
 `datasets/` (sources in `datasets/readme.txt`).
 
