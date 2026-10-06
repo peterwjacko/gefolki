@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "gefolki"
+version = "0.1.0"
+description = "GeFolki dense optical-flow coregistration of heterogeneous remote sensing images"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+license-files = ["copying.txt"]
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "scikit-image>=0.22",
+    "rasterio>=1.3",
+    "typer>=0.12",
+]
+
+[project.optional-dependencies]
+gpu = ["cupy-cuda12x>=13", "nvidia-cuda-nvrtc-cu12", "nvidia-cuda-runtime-cu12"]
+gpu-clahe = ["cucim-cu12"]
+numba = ["numba>=0.60"]
+dev = ["pytest>=8", "ruff>=0.6", "tifffile"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gefolki"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["python", "matlab", "*.ipynb"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "NPY"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+filterwarnings = ["ignore::rasterio.errors.NotGeoreferencedWarning"]
+markers = [
+    "gpu: needs a working CUDA GPU (CuPy); skipped when unavailable",
+    "slow: long-running test",
+    "data: needs external (private) test data; skipped when absent",
+]
