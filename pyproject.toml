@@ -18,8 +18,16 @@ dependencies = [
     "typer>=0.12",
 ]
 
+[project.scripts]
+gefolki = "gefolki.cli:app"
+
 [project.optional-dependencies]
-gpu = ["cupy-cuda12x>=13", "nvidia-cuda-nvrtc-cu12", "nvidia-cuda-runtime-cu12"]
+gpu = [
+    "cupy-cuda12x>=13",
+    "nvidia-cuda-nvrtc-cu12",
+    "nvidia-cuda-runtime-cu12",
+    "nvidia-cufft-cu12",
+]
 gpu-clahe = ["cucim-cu12"]
 numba = ["numba>=0.60"]
 dev = ["pytest>=8", "ruff>=0.6", "tifffile"]
