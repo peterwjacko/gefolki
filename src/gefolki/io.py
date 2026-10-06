@@ -347,18 +347,20 @@ def read_on_grid(
         win = win.round_offsets().round_lengths()
         data = ds.read(list(selection.indexes), window=win)
         src = selection.combine(data)
-        src_valid = _valid(ds, data, selection.indexes, win).astype(np.float32)
+        valid = _valid(ds, data, selection.indexes, win)
         src_tr = ds.window_transform(win)
     del data
     img = np.zeros(shape, np.float32)
     vmask = np.zeros(shape, np.float32)
     common = dict(src_transform=src_tr, src_crs=src_crs, dst_transform=transform, dst_crs=crs)
     with gdal_env():
-        src[src_valid == 0] = np.nan
+        src[~valid] = np.nan
         reproject(src, img, src_nodata=np.nan, dst_nodata=np.nan, resampling=rs,
                   num_threads=threads, **common)  # fmt: skip
-        reproject(src_valid, vmask, dst_nodata=0, resampling=rs, num_threads=threads, **common)
-    valid = (vmask > 0.999) & np.isfinite(img)
+        # 1 = invalid, 2 = valid, 0 = outside the source (dst nodata)
+        reproject(valid.astype(np.float32) + 1, vmask, dst_nodata=0, resampling=rs,
+                  num_threads=threads, **common)  # fmt: skip
+    valid = (vmask > 1.999) & np.isfinite(img)
     img[~valid] = 0
     return img, valid
 
