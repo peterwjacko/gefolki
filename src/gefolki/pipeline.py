@@ -39,6 +39,7 @@ PRESETS: dict[str, FlowParams] = {
 }
 _ORDER = {"nearest": 0, "bilinear": 1, "cubic": 3}
 _CHUNK_BYTES = 1 << 30  # target raw bytes per band chunk when warping
+_GDAL_CACHE_MB = 256
 
 
 @dataclass
@@ -177,6 +178,9 @@ def _warp_to(
     if bk.is_gpu:  # keep the flow on the device across chunks
         u, v = bk.asarray(u), bk.asarray(v)
     with (
+        # GDAL's default block cache (5% of RAM) fills with dirty output blocks; a small
+        # cache keeps memory at ~3 chunks without slowing the band-interleaved writes.
+        io.gdal_env(GDAL_CACHEMAX=_GDAL_CACHE_MB),
         io.create_output(output, info, fmt=output_format) as dst,
         ThreadPoolExecutor(1) as reader,
         ThreadPoolExecutor(1) as writer,
