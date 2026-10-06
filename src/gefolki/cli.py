@@ -5,7 +5,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import math
-import os
+import sys
 import warnings
 from contextlib import contextmanager
 from enum import Enum, StrEnum
@@ -80,17 +80,7 @@ def parse_radius(text: str) -> tuple[int, ...]:
 
 
 def _backend_info() -> dict[str, Any]:
-    fn = getattr(gefolki, "backend_info", None)
-    if fn is not None:
-        return dict(fn())
-    from . import backend
-
-    ok = gefolki.gpu_available()
-    return {
-        "gpu_available": ok,
-        "gpu_error": None if ok else backend._gpu_error,
-        "cpu_threads": os.cpu_count(),
-    }
+    return dict(gefolki.backend_info())
 
 
 def _check_device(device: Device) -> None:
@@ -440,42 +430,26 @@ def locate(
         out.print(f"wrote {chip_output}")
 
 
-def _module_version(name: str) -> str | None:
-    try:
-        mod = __import__(name)
-    except Exception:
-        return None
-    return str(getattr(mod, "__version__", "?"))
-
-
 @app.command()
 def info(as_json: JsonOpt = False) -> None:
     """Show backend (GPU, threads) and library versions."""
     import rasterio
 
+    backend = _backend_info()  # includes numpy, scipy, scikit-image, numba, cucim, cupy
     versions = {
         "gefolki": gefolki.__version__,
-        "python": ".".join(map(str, __import__("sys").version_info[:3])),
-        "numpy": np.__version__,
-        "scipy": _module_version("scipy"),
-        "scikit-image": _module_version("skimage"),
+        "python": ".".join(map(str, sys.version_info[:3])),
         "rasterio": rasterio.__version__,
         "GDAL": rasterio.__gdal_version__,
         "typer": typer.__version__,
-        "cupy": _module_version("cupy"),
-        "numba": _module_version("numba"),
-        "cucim": _module_version("cucim"),
     }
-    data = {"backend": _backend_info(), "versions": versions}
+    data = {"backend": backend, "versions": versions}
     if as_json:
         _print_json(data)
         return
     table = Table(show_header=False, box=None)
-    for k, v in data["backend"].items():
-        table.add_row(k, str(v))
-    table.add_row("", "")
-    for k, v in versions.items():
-        table.add_row(k, v or "[dim]not installed[/]")
+    for k, v in (versions | backend).items():
+        table.add_row(k, "[dim]-[/]" if v is None else str(v))
     out.print(table)
 
 

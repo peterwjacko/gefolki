@@ -1,9 +1,12 @@
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 from scipy import ndimage as ndi
 
 import gefolki as g
-from gefolki.flow import FlowParams
+from gefolki import tiling
+from gefolki.flow import FlowParams, estimate_gpu_bytes_per_pixel
 from gefolki.tiling import _ramp, estimate_flow_tiled, tile_spans
 
 from .geodata import texture
@@ -16,6 +19,14 @@ def test_tile_spans_cover_with_overlap():
         for (a0, a1), (b0, _b1) in zip(spans, spans[1:], strict=False):
             assert a1 - b0 >= o and b0 > a0
         assert all(e - s == min(t, n) for s, e in spans)
+
+
+def test_bytes_per_pixel():
+    gpu = SimpleNamespace(is_gpu=True)
+    ge, ef = FlowParams(contrast_adapt=True), FlowParams()
+    assert tiling.bytes_per_pixel(gpu, ge) == estimate_gpu_bytes_per_pixel(ge)
+    assert tiling.bytes_per_pixel(gpu, ef) < tiling.bytes_per_pixel(gpu, ge)
+    assert tiling.bytes_per_pixel(g.get_backend("cpu")) == tiling.CPU_BYTES_PER_PIXEL
 
 
 def test_feather_weights_sum_to_one():
