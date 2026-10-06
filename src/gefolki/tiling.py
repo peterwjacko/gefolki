@@ -23,9 +23,9 @@ from typing import Any
 import numpy as np
 
 from .backend import Backend, Device, get_backend
-from .flow import FlowParams, estimate_flow
+from .flow import FlowParams, estimate_flow, estimate_gpu_bytes_per_pixel
 
-BYTES_PER_PIXEL = 160  # peak solver memory per pixel (float32 pyramids, rank images, temps)
+CPU_BYTES_PER_PIXEL = 160  # peak CPU solver memory per pixel (pyramids, rank images, temps)
 GPU_TILE = 4096
 CPU_TILE = 2048
 
@@ -46,9 +46,16 @@ def _available_bytes(bk: Backend) -> int:
         return 8 << 30
 
 
-def fits_in_memory(shape: tuple[int, int], bk: Backend, fraction: float = 0.5) -> bool:
+def bytes_per_pixel(bk: Backend, params: FlowParams | None = None) -> int:
+    """Peak solver memory per pixel on ``bk``."""
+    return estimate_gpu_bytes_per_pixel(params) if bk.is_gpu else CPU_BYTES_PER_PIXEL
+
+
+def fits_in_memory(
+    shape: tuple[int, int], bk: Backend, params: FlowParams | None = None, fraction: float = 0.5
+) -> bool:
     """True if a whole-image flow on ``shape`` should fit in ``fraction`` of free memory."""
-    return shape[0] * shape[1] * BYTES_PER_PIXEL <= fraction * _available_bytes(bk)
+    return shape[0] * shape[1] * bytes_per_pixel(bk, params) <= fraction * _available_bytes(bk)
 
 
 def tile_spans(n: int, tile: int, overlap: int) -> list[tuple[int, int]]:
@@ -93,7 +100,7 @@ def estimate_flow_tiled(
     bk = get_backend(device, threads)
     shape = master.shape
     if tile_size is None:
-        tile_size = 0 if fits_in_memory(shape, bk) else (GPU_TILE if bk.is_gpu else CPU_TILE)
+        tile_size = 0 if fits_in_memory(shape, bk, p) else (GPU_TILE if bk.is_gpu else CPU_TILE)
     if not tile_size or (shape[0] <= tile_size and shape[1] <= tile_size):
         if progress:
             progress("flow", 0, 1)
@@ -113,7 +120,7 @@ def estimate_flow_tiled(
     if bk.is_gpu:
         workers, tile_bk = 1, bk
     else:
-        by_mem = int(0.5 * _available_bytes(bk) // (tile_size**2 * BYTES_PER_PIXEL))
+        by_mem = int(0.5 * _available_bytes(bk) // (tile_size**2 * CPU_BYTES_PER_PIXEL))
         workers = max(1, min(bk.threads, len(tiles), by_mem))
         tile_bk = get_backend("cpu", max(1, bk.threads // workers))
 
