@@ -8,7 +8,7 @@ from typer.testing import CliRunner
 import gefolki as g
 from gefolki import cli, io
 
-from .conftest import DATA
+from .conftest import sample
 from .geodata import WAVELENGTHS, make_pair
 
 DX, DY = 4, -3
@@ -108,7 +108,7 @@ def test_gpu_unavailable(pair, tmp_path, monkeypatch):
 
 def test_locate_jacksonville(tmp_path):
     chip = tmp_path / "chip.tif"
-    args = (DATA / "S1_Jacksonville_GEE.tif", DATA / "JacksonvilleNavalAirStation_sandiaKu.png")
+    args = (sample("S1_Jacksonville_GEE.tif"), sample("JacksonvilleNavalAirStation_sandiaKu.png"))
     data = json.loads(run("locate", *args, "--device", "cpu", "--json").stdout)
     assert abs(data["row"] - 852) <= 2 and abs(data["col"] - 1112) <= 2
     assert len(data["map_bounds"]) == 4

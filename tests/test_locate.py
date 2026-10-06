@@ -7,7 +7,7 @@ import gefolki as g
 from gefolki.backend import get_backend
 from gefolki.locate import _score_map
 
-from .conftest import DATA
+from .conftest import sample
 
 CPU = get_backend("cpu", threads=4)
 ROW, COL, H, W = 237, 411, 120, 200
@@ -83,13 +83,13 @@ def test_bad_shapes(texture):
 def test_jacksonville(tmp_path):
     out = tmp_path / "chip.tif"
     res = g.locate_raster(
-        DATA / "S1_Jacksonville_GEE.tif",
-        DATA / "JacksonvilleNavalAirStation_sandiaKu.png",
+        sample("S1_Jacksonville_GEE.tif"),
+        sample("JacksonvilleNavalAirStation_sandiaKu.png"),
         chip_output=out,
         device="cpu",
     )
     assert abs(res.row - JAX[0]) <= 2 and abs(res.col - JAX[1]) <= 2
-    with rasterio.open(DATA / "S1_Jacksonville_GEE.tif") as ms, rasterio.open(out) as c:
+    with rasterio.open(sample("S1_Jacksonville_GEE.tif")) as ms, rasterio.open(out) as c:
         assert (c.height, c.width, c.count) == (360, 806, ms.count)
         assert c.crs == ms.crs
         np.testing.assert_allclose(c.bounds[0], res.map_bounds[0])

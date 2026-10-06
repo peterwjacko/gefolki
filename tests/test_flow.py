@@ -6,7 +6,7 @@ import gefolki as g
 from gefolki import filters as F
 from gefolki.flow import FlowParams, estimate_gpu_bytes_per_pixel
 
-from .conftest import DATA, read_band
+from .conftest import read_band, sample
 
 DX, DY = 3, -2  # slave(x, y) = master(x + DX, y + DY)  =>  u = -DX, v = -DY
 FAST = dict(levels=3, radius=(16, 8), iterations=2)
@@ -121,8 +121,8 @@ EVAL = {
 def test_evalgefolki_ground_truth_recovery(case, fn):
     """Warp the master by the EvalGeFolki GT flow, then recover it (legacy settings)."""
     mpath, fpath, legacy, limit = EVAL[case]
-    master = read_band(DATA / "EvalGeFolki" / mpath)
-    gt = tifffile.imread(DATA / "EvalGeFolki" / fpath)  # (H, W, 2); GDAL sees one page only
+    master = read_band(sample(f"EvalGeFolki/{mpath}"))
+    gt = tifffile.imread(sample(f"EvalGeFolki/{fpath}"))  # (H, W, 2); GDAL sees one page only
     slave = g.warp(master, gt[..., 0], gt[..., 1], device="cpu")  # slave(x) = master(x + gt)
     u, v = fn(master, slave, device="cpu", levels=3, radius=(16, 8), iterations=4)
     epe = np.hypot(u + gt[..., 0], v + gt[..., 1])[30:-30, 30:-30].mean()

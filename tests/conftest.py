@@ -9,6 +9,14 @@ from gefolki import gpu_available
 DATA = Path(__file__).resolve().parents[1] / "datasets"
 
 
+def sample(name: str) -> Path:
+    """Path of a sample dataset file; skips the test if it has not been downloaded."""
+    path = DATA / name
+    if not path.is_file():
+        pytest.skip(f"sample data missing: run `python datasets/fetch.py {name}`")
+    return path
+
+
 def pytest_collection_modifyitems(config, items):
     if gpu_available():
         return
@@ -26,10 +34,10 @@ def read_band(path: Path, band: int = 1) -> np.ndarray:
 @pytest.fixture(scope="session")
 def radar() -> np.ndarray:
     """Radar P-band image (first channel), 2000x2000 float32."""
-    return read_band(DATA / "radar_bandep.png")
+    return read_band(sample("radar_bandep.png"))
 
 
 @pytest.fixture(scope="session")
 def optical() -> np.ndarray:
     """Optical image co-located with ``radar`` (green channel)."""
-    return read_band(DATA / "optiquehr_georef.png", 2)
+    return read_band(sample("optiquehr_georef.png"), 2)

@@ -19,6 +19,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
       - run: uv sync --locked --extra dev
+      - uses: actions/cache@v4
+        with:
+          path: datasets
+          key: datasets-${{ hashFiles('datasets/fetch.py') }}
+      - run: python datasets/fetch.py radar_bandep.png optiquehr_georef.png EvalGeFolki S1_Jacksonville_GEE.tif JacksonvilleNavalAirStation_sandiaKu.png
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run pytest -m "not gpu" --durations=10

@@ -25,7 +25,15 @@ Rewrite of the original GeFolki Matlab/Python code as the `gefolki` package.
 - Examples: `examples/quickstart.ipynb`, `examples/register_hyperspectral.py`.
 - Tests (pytest, `gpu`/`slow`/`data` markers), benchmarks, GitHub Actions CI.
 
+- Documentation in `docs/`: user guide and coregistration course (rewritten from the
+  original PDF manual and slides, with figures regenerated from the sample data), CLI and
+  API references, implementation notes, migration guide, development guide.
+- `datasets/fetch.py`: downloads the sample data from the original ONERA repository
+  (pinned commit, SHA-256 checked); tests needing a missing file are skipped.
+
 ### Removed
 
-- Legacy `python/` and `matlab/` code and the `GEFOLKI_TP1/TP2` notebooks (see the
-  migration table in the README).
+- Legacy `python/` and `matlab/` code and the `GEFOLKI_TP1/TP2` notebooks (see
+  `docs/migration.md`).
+- `manual_gefolki_english.pdf` and `COREGISTRATION.pdf` (replaced by `docs/`).
+- Sample data files from git (`datasets/fetch.py` downloads them).
