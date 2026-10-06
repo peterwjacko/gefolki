@@ -1,6 +1,9 @@
-"""Time GeFolki flow on a 2048x2048 pair: CPU 1 thread vs N threads vs GPU.
+"""Time flow estimation on a synthetic pair: CPU 1 thread vs N threads vs GPU.
 
-Usage: python benchmarks/bench_flow.py [--size 2048] [--threads N] [--variant gefolki]
+Usage: python benchmarks/bench_flow.py [--size 2048] [--threads N] [--variant gefolki efolki]
+
+Prints best-of-2 wall times (host arrays in and out, transfers included) and, on GPU, the
+peak CuPy memory-pool size in bytes per pixel.
 """
 
 import argparse
@@ -36,23 +39,52 @@ def timeit(fn, repeat: int = 2) -> float:
     return best
 
 
+def gpu_peak_bytes(fn) -> int:
+    """Peak CuPy memory-pool size while running ``fn``."""
+    import cupy as cp
+
+    pool = cp.get_default_memory_pool()
+    pool.free_all_blocks()
+    peak = [0]
+
+    class Peak(cp.cuda.MemoryHook):
+        name = "peak"
+
+        def alloc_postprocess(self, **kw):
+            peak[0] = max(peak[0], pool.total_bytes())
+
+    with Peak():
+        fn()
+    return peak[0]
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--size", type=int, default=2048)
     ap.add_argument("--threads", type=int, default=os.cpu_count())
-    ap.add_argument("--variant", choices=["folki", "efolki", "gefolki"], default="gefolki")
+    ap.add_argument(
+        "--variant", nargs="+", choices=["folki", "efolki", "gefolki"], default=["gefolki"]
+    )
     a = ap.parse_args()
     master, slave = make_pair(a.size)
-    fn = getattr(g, a.variant)
-    print(f"{a.variant} defaults, {a.size}x{a.size} float32")
-    runs = [("cpu", 1), ("cpu", a.threads)] + ([("gpu", 1)] if g.gpu_available() else [])
-    for dev, th in runs:
-        fn(master[:256, :256], slave[:256, :256], device=dev, threads=th)  # warm-up / JIT
-        if dev == "gpu":
-            fn(master, slave, device=dev)  # compile kernels for this size
-        t = timeit(lambda d=dev, n=th: fn(master, slave, device=d, threads=n))
-        label = f"{dev} {th} thread(s)" if dev == "cpu" else "gpu"
-        print(f"  {label:<18} {t:7.2f} s")
+    info = g.backend_info()
+    gpu = info["gpu"]["name"] if info["gpu_available"] else "none"
+    print(f"{a.size}x{a.size} float32, defaults; numba {info['numba']}, GPU {gpu}")
+    runs = [("cpu", 1), ("cpu", a.threads)] + ([("gpu", 1)] if info["gpu_available"] else [])
+    for variant in a.variant:
+        fn = getattr(g, variant)
+        print(variant)
+        for dev, th in runs:
+            fn(master[:256, :256], slave[:256, :256], device=dev, threads=th)  # warm-up / JIT
+            if dev == "gpu":
+                fn(master, slave, device=dev)  # compile kernels for this size
+            t = timeit(lambda f=fn, d=dev, n=th: f(master, slave, device=d, threads=n))
+            label = f"{dev} {th} thread(s)" if dev == "cpu" else "gpu"
+            extra = ""
+            if dev == "gpu":
+                peak = gpu_peak_bytes(lambda f=fn: f(master, slave, device="gpu"))
+                extra = f"   peak pool {peak / 2**20:.0f} MiB ({peak / master.size:.0f} B/px)"
+            print(f"  {label:<18} {t:7.2f} s{extra}")
 
 
 if __name__ == "__main__":
