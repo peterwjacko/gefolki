@@ -1,6 +1,7 @@
 """Registration on private Liffey airborne data (skipped when absent).
 
-GEFOLKI_LIFFEY_DATA points at the subset directory (line_P3/, tiny/). Numbers are printed
+GEFOLKI_LIFFEY_DATA points at the subset directory (line_P3/, tiny/); GEFOLKI_LIFFEY_RGB at the
+full RGB orthomosaic (slow test). Numbers are printed
 (run with ``-s``) and recorded as junit properties.
 """
 
@@ -14,12 +15,8 @@ from skimage.registration import phase_cross_correlation
 import gefolki as g
 from gefolki import io
 
-_S = "/tmp/claude-1000/-home-peter-Projects-github-com-peterwjacko-gefolki/d081379f-f799-43b1-b78c-05291603c39f/scratchpad"  # noqa: E501
-DATA = Path(os.environ.get("GEFOLKI_LIFFEY_DATA", f"{_S}/liffey_subset"))
-FULL_RGB = Path(
-    "/mnt/data0/iubar-supp/reference/liffey/level2_ard/"
-    "20250430_Liffey_BH_aircraft_RGB_orthomosaic.tif"
-)
+DATA = Path(os.environ.get("GEFOLKI_LIFFEY_DATA", "/nonexistent"))
+FULL_RGB = Path(os.environ.get("GEFOLKI_LIFFEY_RGB", "/nonexistent"))
 P3 = DATA / "line_P3"
 pytestmark = [
     pytest.mark.data,

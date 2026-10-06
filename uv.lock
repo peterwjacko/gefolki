@@ -160,6 +160,7 @@ source = { editable = "." }
 dependencies = [
     { name = "numpy" },
     { name = "rasterio" },
+    { name = "rich" },
     { name = "scikit-image" },
     { name = "scipy" },
     { name = "typer" },
@@ -195,6 +196,7 @@ requires-dist = [
     { name = "nvidia-cufft-cu12", marker = "extra == 'gpu'" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "rasterio", specifier = ">=1.3" },
+    { name = "rich", specifier = ">=13.8" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
     { name = "scikit-image", specifier = ">=0.22" },
     { name = "scipy", specifier = ">=1.11" },
