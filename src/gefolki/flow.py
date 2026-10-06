@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -49,6 +50,168 @@ def _normalise(a: Any, valid: Any, xp: Any) -> Any:
     return xp.where(valid, (a - lo) / ptp, 0).astype(xp.float32)
 
 
+def estimate_gpu_bytes_per_pixel(params: FlowParams | None = None) -> int:
+    """Approximate peak GPU memory of :func:`estimate_flow` per image pixel, in bytes.
+
+    Measured peaks of the CuPy memory pool (including its fragmentation) for 2048^2 to
+    6000^2 images: GeFolki ~110 B/px (92 B/px live arrays), EFolki/Folki ~90 B/px; the
+    values returned add ~10% headroom. Use it to choose tile sizes:
+    ``max_pixels = free_bytes // estimate_gpu_bytes_per_pixel(params)``. The input arrays,
+    if already on the device, are not included.
+    """
+    p = params or FlowParams()
+    return 120 if p.contrast_adapt else 100
+
+
+# Fused element-wise steps of the solver iteration. CPU: numba kernels when installed, else
+# NumPy on row chunks run on the thread pool (both bitwise identical to whole-array NumPy);
+# GPU: one CuPy kernel per step.
+_EW_OPTS = ("--fmad=false",)  # no FMA contraction: keep GPU arithmetic close to CPU
+
+
+@functools.cache
+def _ew_kernels() -> dict[str, Any]:
+    import cupy as cp
+
+    k = functools.partial(cp.ElementwiseKernel, options=_EW_OPTS)
+    return {
+        "absdiff": k(
+            "float32 h0, float32 h1w",
+            "float32 e1, float32 e2",
+            "e1 = fabsf(h0 - h1w); e2 = fabsf(1.0f - h0 - h1w);",
+            "gefolki_absdiff",
+        ),
+        "residual": k(
+            "float32 r0, float32 r1w, float32 ix, float32 iy, float32 u, float32 v",
+            "float32 p, float32 q",
+            "float it = r0 - r1w + u * ix + v * iy; p = it * ix; q = it * iy;",
+            "gefolki_residual",
+        ),
+        "residual_sel": k(
+            "float32 r0, float32 r1w, float32 r1iw, float32 c1, float32 c2, "
+            "float32 ix, float32 iy, float32 u, float32 v",
+            "float32 p, float32 q",
+            "float it = r0 - (c1 > c2 ? r1iw : r1w) + u * ix + v * iy; p = it * ix; q = it * iy;",
+            "gefolki_residual_sel",
+        ),
+        "update": k(
+            "float32 g, float32 h, float32 a, float32 b, float32 c, float32 d",
+            "float32 u, float32 v",
+            "float uu = (g * b - c * h) / d; float vv = (a * h - c * g) / d;"
+            "bool ok = isfinite(uu) && isfinite(vv); u = ok ? uu : 0.0f; v = ok ? vv : 0.0f;",
+            "gefolki_update",
+        ),
+    }
+
+
+def _chunked(bk: Backend, n_out: int, args: tuple[Any, ...], fn: Any) -> list[np.ndarray]:
+    """Run ``fn(*arg_rows, *out_rows)`` on row chunks; returns ``n_out`` new float32 arrays."""
+    outs = [np.empty(args[0].shape, np.float32) for _ in range(n_out)]
+    F._run_chunks(
+        args[0].shape[0], bk, lambda s, e: fn(*(a[s:e] for a in args), *(o[s:e] for o in outs))
+    )
+    return outs
+
+
+def _absdiff_np(h0, h1w, e1, e2):
+    np.abs(h0 - h1w, out=e1)
+    np.abs(1 - h0 - h1w, out=e2)
+
+
+def _residual_np(r0, r1w, ix, iy, u, v, p, q, sel=None):
+    if sel is not None:
+        r1w = np.where(sel[0] > sel[1], sel[2], r1w)
+    it = r0 - r1w + u * ix + v * iy
+    np.multiply(it, ix, out=p)
+    np.multiply(it, iy, out=q)
+
+
+def _residual_sel_np(r0, r1w, r1iw, c1, c2, ix, iy, u, v, p, q):
+    _residual_np(r0, r1w, ix, iy, u, v, p, q, (c1, c2, r1iw))
+
+
+def _update_np(g, h, a, b, c, d, u, v):
+    with np.errstate(divide="ignore", invalid="ignore"):
+        uu = (g * b - c * h) / d
+        vv = (a * h - c * g) / d
+    bad = ~(np.isfinite(uu) & np.isfinite(vv))
+    u[...] = np.where(bad, 0, uu)
+    v[...] = np.where(bad, 0, vv)
+
+
+def _fused(name: str, n_out: int, bk: Backend, *args: Any) -> list[Any]:
+    if bk.is_gpu:
+        return list(_ew_kernels()[name](*args))
+    if F._use_numba(bk, *args):
+        with F._numba_threads(bk):
+            outs = _NUMBA_EW[name](*(a.ravel() for a in args))
+        return [o.reshape(args[0].shape) for o in outs]
+    return _chunked(bk, n_out, args, _CPU_EW[name])
+
+
+_CPU_EW = {
+    "absdiff": _absdiff_np,
+    "residual": _residual_np,
+    "residual_sel": _residual_sel_np,
+    "update": _update_np,
+}
+
+if F.numba is not None:  # one parallel pass per step; same float32 operations as NumPy
+    _njit = F.numba.njit(parallel=True, cache=True, error_model="numpy")
+    _prange = F.numba.prange
+
+    @_njit
+    def _absdiff_nb(h0, h1w):  # pragma: no cover - compiled
+        e1 = np.empty(h0.size, np.float32)
+        e2 = np.empty(h0.size, np.float32)
+        one = np.float32(1)
+        for i in _prange(h0.size):
+            e1[i] = abs(h0[i] - h1w[i])
+            e2[i] = abs(one - h0[i] - h1w[i])
+        return e1, e2
+
+    @_njit
+    def _residual_nb(r0, r1w, ix, iy, u, v):  # pragma: no cover - compiled
+        p = np.empty(r0.size, np.float32)
+        q = np.empty(r0.size, np.float32)
+        for i in _prange(r0.size):
+            it = r0[i] - r1w[i] + u[i] * ix[i] + v[i] * iy[i]
+            p[i] = it * ix[i]
+            q[i] = it * iy[i]
+        return p, q
+
+    @_njit
+    def _residual_sel_nb(r0, r1w, r1iw, c1, c2, ix, iy, u, v):  # pragma: no cover - compiled
+        p = np.empty(r0.size, np.float32)
+        q = np.empty(r0.size, np.float32)
+        for i in _prange(r0.size):
+            r = r1iw[i] if c1[i] > c2[i] else r1w[i]
+            it = r0[i] - r + u[i] * ix[i] + v[i] * iy[i]
+            p[i] = it * ix[i]
+            q[i] = it * iy[i]
+        return p, q
+
+    @_njit
+    def _update_nb(g, h, a, b, c, d):  # pragma: no cover - compiled
+        u = np.empty(g.size, np.float32)
+        v = np.empty(g.size, np.float32)
+        zero = np.float32(0)
+        for i in _prange(g.size):
+            uu = (g[i] * b[i] - c[i] * h[i]) / d[i]
+            vv = (a[i] * h[i] - c[i] * g[i]) / d[i]
+            ok = np.isfinite(uu) and np.isfinite(vv)
+            u[i] = uu if ok else zero
+            v[i] = vv if ok else zero
+        return u, v
+
+    _NUMBA_EW = {
+        "absdiff": _absdiff_nb,
+        "residual": _residual_nb,
+        "residual_sel": _residual_sel_nb,
+        "update": _update_nb,
+    }
+
+
 def _solve_level(j0: Any, j1: Any, u: Any, v: Any, p: FlowParams, bk: Backend) -> tuple[Any, Any]:
     xp = bk.xp
     if p.rank:
@@ -56,13 +219,19 @@ def _solve_level(j0: Any, j1: Any, u: Any, v: Any, p: FlowParams, bk: Backend) -
         r1_sup = F.rank_sup(j1, p.rank, bk)
         r1_inf = F.rank_inf(j1, p.rank, bk) if p.contrast_adapt else None
     else:
-        r0, r1_sup, r1_inf = j0, j1, 1 - j1
+        r0, r1_sup = j0, j1
+        r1_inf = 1 - j1 if p.contrast_adapt else None
     if p.contrast_adapt:
-        h0, h1 = F.clahe(j0, bk), F.clahe(j1, bk)
+        if bk.is_gpu or bk.threads == 1:
+            h0, h1 = F.clahe(j0, bk), F.clahe(j1, bk)
+        else:  # skimage CLAHE is single-threaded: equalise both images at once
+            h0, h1 = F._executor(bk.threads).map(lambda a: F.clahe(a, bk), (j0, j1))
+        imgs = xp.stack([r1_sup, h1, r1_inf])  # warped together, sharing coordinates
+        del h1, r1_inf
+    else:
+        imgs = r1_sup[None]
+    del r1_sup, j0, j1  # (the caller holds no references: frees device memory early)
     ix, iy = F.gradients(r0, bk)
-    rows, cols = j0.shape
-    x = xp.arange(cols, dtype=xp.float32)[None, :]
-    y = xp.arange(rows, dtype=xp.float32)[:, None]
 
     for rad in p.radius:
         a = F.box_filter(ix * ix, rad, bk)
@@ -70,23 +239,22 @@ def _solve_level(j0: Any, j1: Any, u: Any, v: Any, p: FlowParams, bk: Backend) -
         c = F.box_filter(ix * iy, rad, bk)
         d = a * b - c * c
         for _ in range(p.iterations):
-            xs = xp.clip(x + u, 0, cols - 1)
-            ys = xp.clip(y + v, 0, rows - 1)
-            r1w = F.interp2(r1_sup, xs, ys, bk)
+            w = F.warp_flow(imgs, u, v, bk)
             if p.contrast_adapt:
-                h1w = F.interp2(h1, xs, ys, bk)
-                crit1 = F.box_filter(xp.abs(h0 - h1w), p.rank, bk)
-                crit2 = F.box_filter(xp.abs(1 - h0 - h1w), p.rank, bk)
-                r1w = xp.where(crit1 > crit2, F.interp2(r1_inf, xs, ys, bk), r1w)
-            it = r0 - r1w + u * ix + v * iy
-            g = F.box_filter(it * ix, rad, bk)
-            h = F.box_filter(it * iy, rad, bk)
-            with np.errstate(divide="ignore", invalid="ignore"):
-                u = (g * b - c * h) / d
-                v = (a * h - c * g) / d
-            bad = ~(xp.isfinite(u) & xp.isfinite(v))
-            u = xp.where(bad, 0, u).astype(xp.float32)
-            v = xp.where(bad, 0, v).astype(xp.float32)
+                e1, e2 = _fused("absdiff", 2, bk, h0, w[1])
+                crit1 = F.box_filter(e1, p.rank, bk)
+                del e1
+                crit2 = F.box_filter(e2, p.rank, bk)
+                del e2
+                pq = _fused("residual_sel", 2, bk, r0, w[0], w[2], crit1, crit2, ix, iy, u, v)
+                del crit1, crit2
+            else:
+                pq = _fused("residual", 2, bk, r0, w[0], ix, iy, u, v)
+            del w
+            g = F.box_filter(pq[0], rad, bk)
+            h = F.box_filter(pq[1], rad, bk)
+            del pq
+            u, v = _fused("update", 2, bk, g, h, a, b, c, d)
     return u, v
 
 
@@ -109,6 +277,17 @@ def estimate_flow(
     """
     p = params or FlowParams()
     bk = get_backend(device, threads)
+    u, v = _pyramid_flow(*_prepare(master, slave, mask, bk), p, bk)
+    if return_device:
+        return u, v
+    u, v = bk.to_host(u), bk.to_host(v)
+    if bk.is_gpu:  # hand cached device memory back (e.g. to other processes or cuCIM)
+        bk.xp.get_default_memory_pool().free_all_blocks()
+    return u, v
+
+
+def _prepare(master: Any, slave: Any, mask: Any, bk: Backend) -> tuple[Any, Any]:
+    """Backend float32 copies normalised to [0, 1] with invalid pixels set to 0."""
     xp = bk.xp
     m, s = bk.asarray(master), bk.asarray(slave)
     if m.ndim != 2 or m.shape != s.shape:
@@ -116,25 +295,27 @@ def estimate_flow(
     valid = xp.isfinite(m) & xp.isfinite(s)
     if mask is not None:
         valid &= bk.asarray(mask, dtype=bool)
-    m, s = _normalise(m, valid, xp), _normalise(s, valid, xp)
+    return _normalise(m, valid, xp), _normalise(s, valid, xp)
 
+
+def _pyramid_flow(m: Any, s: Any, p: FlowParams, bk: Backend) -> tuple[Any, Any]:
+    xp = bk.xp
     # Keep the coarsest level at least 2 px per side so gradients are defined.
     levels = p.levels
     while levels and -(-min(m.shape) // 2**levels) < 2:
         levels -= 1
     pyr0, pyr1 = F.pyramid(m, levels, bk), F.pyramid(s, levels, bk)
-
+    del m, s
     u = v = None
-    for j0, j1 in zip(reversed(pyr0), reversed(pyr1), strict=True):
+    while pyr0:  # coarse to fine, dropping each level once solved
+        shape = pyr0[-1].shape
         if u is None:
-            u = xp.zeros(j0.shape, xp.float32)
-            v = xp.zeros(j0.shape, xp.float32)
+            u = xp.zeros(shape, xp.float32)
+            v = xp.zeros(shape, xp.float32)
         else:
-            u, v = F.upsample_flow(u, j0.shape, bk), F.upsample_flow(v, j0.shape, bk)
-        u, v = _solve_level(j0, j1, u, v, p, bk)
-    if return_device:
-        return u, v
-    return bk.to_host(u), bk.to_host(v)
+            u, v = F.upsample_flow(u, shape, bk), F.upsample_flow(v, shape, bk)
+        u, v = _solve_level(pyr0.pop(), pyr1.pop(), u, v, p, bk)
+    return u, v
 
 
 def folki(

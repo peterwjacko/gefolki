@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import importlib.util
 import os
 from dataclasses import dataclass
 from types import ModuleType
@@ -90,3 +91,61 @@ def get_backend(device: Device | Backend = "auto", threads: int | None = None) -
         return Backend("gpu", cp, cndi, 1)
     n = threads if threads is not None else (os.cpu_count() or 1)
     return Backend("cpu", np, scipy.ndimage, max(1, int(n)))
+
+
+def _version(module: str, *dists: str) -> str | None:
+    """Version of importable ``module`` (from distribution ``dists`` or ``module``), or None."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    if importlib.util.find_spec(module) is None:
+        return None
+    for d in (*dists, module):
+        try:
+            return version(d)
+        except PackageNotFoundError:
+            pass
+    return "unknown"
+
+
+def backend_info() -> dict[str, Any]:
+    """Describe the available compute backends (for ``gefolki info`` and bug reports).
+
+    Keys: ``default`` ("gpu" or "cpu", what device="auto" picks), ``cpu_threads``,
+    ``numpy``/``scipy``/``scikit-image`` versions, ``numba`` and ``cucim`` versions (None if
+    not installed), ``gpu_available``, ``gpu_error`` and, when a GPU is usable, ``cupy``,
+    ``cuda_runtime``, ``cuda_driver`` and ``gpu`` (name, compute capability, total and free
+    memory in bytes).
+    """
+    import scipy
+
+    ok = gpu_available()
+    info: dict[str, Any] = {
+        "default": "gpu" if ok else "cpu",
+        "cpu_threads": os.cpu_count() or 1,
+        "numpy": np.__version__,
+        "scipy": scipy.__version__,
+        "scikit-image": _version("skimage", "scikit-image"),
+        "numba": _version("numba"),
+        "cucim": _version("cucim", "cucim-cu12", "cucim-cu13"),
+        "gpu_available": ok,
+        "gpu_error": _gpu_error,
+    }
+    if ok:
+        import cupy as cp
+
+        dev = cp.cuda.Device()
+        props = cp.cuda.runtime.getDeviceProperties(dev.id)
+        free, total = cp.cuda.runtime.memGetInfo()
+        info |= {
+            "cupy": cp.__version__,
+            "cuda_runtime": cp.cuda.runtime.runtimeGetVersion(),
+            "cuda_driver": cp.cuda.runtime.driverGetVersion(),
+            "gpu": {
+                "id": dev.id,
+                "name": props["name"].decode(),
+                "compute_capability": f"{props['major']}.{props['minor']}",
+                "memory_total": int(total),
+                "memory_free": int(free),
+            },
+        }
+    return info
