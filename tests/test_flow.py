@@ -3,7 +3,8 @@ import pytest
 import tifffile
 
 import gefolki as g
-from gefolki.flow import FlowParams
+from gefolki import filters as F
+from gefolki.flow import FlowParams, estimate_gpu_bytes_per_pixel
 
 from .conftest import DATA, read_band
 
@@ -47,6 +48,23 @@ def test_threads_do_not_change_result(radar):
     u8, v8 = g.estimate_flow(master, slave, p, device="cpu", threads=8)
     np.testing.assert_array_equal(u1, u8)
     np.testing.assert_array_equal(v1, v8)
+
+
+@pytest.mark.skipif(F.numba is None, reason="numba not installed")
+@pytest.mark.parametrize("contrast_adapt", [False, True])
+def test_numba_and_numpy_paths_identical(radar, optical, monkeypatch, contrast_adapt):
+    master, slave = radar[800:1056, 800:1056], optical[800:1056, 800:1056]
+    p = FlowParams(contrast_adapt=contrast_adapt, **FAST)
+    fast = g.estimate_flow(master, slave, p, device="cpu", threads=4)
+    monkeypatch.setattr(F, "numba", None)
+    slow = g.estimate_flow(master, slave, p, device="cpu", threads=4)
+    np.testing.assert_array_equal(fast[0], slow[0])
+    np.testing.assert_array_equal(fast[1], slow[1])
+
+
+def test_gpu_bytes_per_pixel_estimate():
+    assert estimate_gpu_bytes_per_pixel() == estimate_gpu_bytes_per_pixel(FlowParams())
+    assert estimate_gpu_bytes_per_pixel(FlowParams(contrast_adapt=True)) > 100
 
 
 def test_mask_and_nan_are_ignored(radar):

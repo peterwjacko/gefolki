@@ -8,7 +8,7 @@ import pytest
 import gefolki as g
 from gefolki import filters as F
 from gefolki.backend import get_backend
-from gefolki.flow import FlowParams
+from gefolki.flow import FlowParams, estimate_gpu_bytes_per_pixel
 
 from .test_flow import DX, DY, FAST, interior_median, shifted_pair
 
@@ -54,11 +54,45 @@ def test_filters_match(gpu, img, op):
     np.testing.assert_allclose(gpu.to_host(op(gpu.asarray(img), gpu)), op(img, CPU), atol=2e-5)
 
 
-def test_clahe_cpu_fallback(gpu, img, monkeypatch):
-    monkeypatch.setitem(sys.modules, "cucim", None)  # force the host round-trip path
-    out = F.clahe(gpu.asarray(img), gpu)
-    assert type(out).__module__.startswith("cupy")
-    np.testing.assert_allclose(gpu.to_host(out), F.clahe(img, CPU), atol=1e-6)
+@pytest.mark.parametrize("crop", [(slice(None), slice(None)), (slice(0, 31), slice(0, 40))])
+def test_clahe_cupy_port_matches_skimage(gpu, radar, monkeypatch, crop):
+    monkeypatch.setitem(sys.modules, "cucim", None)  # force the CuPy port
+    monkeypatch.setattr(F, "numba", None)  # CPU reference: scikit-image itself
+    for a in (radar[crop] / 255, np.random.default_rng(0).random((300, 257), np.float32)):
+        out = F.clahe(gpu.asarray(a), gpu)
+        assert type(out).__module__.startswith("cupy") and out.dtype == np.float32
+        np.testing.assert_array_equal(gpu.to_host(out), F.clahe(a, CPU))
+
+
+def test_warp_flow_matches_cpu(gpu, img):
+    rng = np.random.default_rng(4)
+    u = rng.uniform(-20, 20, img.shape).astype(np.float32)
+    v = rng.uniform(-20, 20, img.shape).astype(np.float32)
+    stack = np.stack([img, img * 100])
+    out = F.warp_flow(gpu.asarray(stack), gpu.asarray(u), gpu.asarray(v), gpu)
+    np.testing.assert_allclose(
+        gpu.to_host(out), F.warp_flow(stack, u, v, CPU), rtol=1e-5, atol=1e-5
+    )
+
+
+def test_gpu_memory_within_estimate(gpu, radar):
+    import cupy as cp
+
+    pool = cp.get_default_memory_pool()
+    pool.free_all_blocks()
+    peak = [0]
+
+    class Peak(cp.cuda.MemoryHook):
+        name = "peak"
+
+        def alloc_postprocess(self, **kw):
+            peak[0] = max(peak[0], pool.total_bytes())
+
+    master = radar[:1024, :1024]
+    with Peak():
+        g.gefolki(master, np.roll(master, 2, axis=1), device="gpu")
+    assert peak[0] <= estimate_gpu_bytes_per_pixel(FlowParams(contrast_adapt=True)) * master.size
+    assert pool.total_bytes() == 0  # cached blocks handed back after the run
 
 
 def test_clahe_cucim(gpu, img):
