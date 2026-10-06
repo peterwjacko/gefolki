@@ -297,18 +297,26 @@ def _rank_kernel():
 
 
 _numba_lock = threading.Lock()  # numba's workqueue layer forbids concurrent parallel calls
+_numba_concurrent = False  # True once a thread-safe layer (tbb, omp) is known to be active
 
 
 @contextlib.contextmanager
 def _numba_threads(bk: Backend) -> Iterator[None]:
-    """Run numba parallel kernels with ``bk.threads`` threads (serialised across callers)."""
-    with _numba_lock:
+    """Run numba parallel kernels with ``bk.threads`` threads (``set_num_threads`` is
+    thread-local). Calls are serialised unless numba runs a thread-safe threading layer."""
+    global _numba_concurrent
+    with contextlib.nullcontext() if _numba_concurrent else _numba_lock:
         prev = numba.get_num_threads()
         numba.set_num_threads(min(bk.threads, numba.config.NUMBA_NUM_THREADS))
         try:
             yield
         finally:
             numba.set_num_threads(prev)
+    if not _numba_concurrent:
+        try:
+            _numba_concurrent = numba.threading_layer() != "workqueue"
+        except ValueError:  # no parallel kernel has run yet
+            pass
 
 
 def _use_numba(bk: Backend, *arrays: Any) -> bool:

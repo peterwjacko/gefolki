@@ -62,6 +62,22 @@ def test_numba_and_numpy_paths_identical(radar, optical, monkeypatch, contrast_a
     np.testing.assert_array_equal(fast[1], slow[1])
 
 
+def test_concurrent_calls_identical(radar):
+    # e.g. tiled flow runs several CPU solvers at once
+    from concurrent.futures import ThreadPoolExecutor
+
+    master, slave = shifted_pair(radar)
+    p = FlowParams(contrast_adapt=True, **FAST)
+    ref = g.estimate_flow(master, slave, p, device="cpu", threads=1)
+    with ThreadPoolExecutor(4) as ex:
+        runs = list(
+            ex.map(lambda _: g.estimate_flow(master, slave, p, device="cpu", threads=4), range(4))
+        )
+    for u, v in runs:
+        np.testing.assert_array_equal(u, ref[0])
+        np.testing.assert_array_equal(v, ref[1])
+
+
 def test_gpu_bytes_per_pixel_estimate():
     assert estimate_gpu_bytes_per_pixel() == estimate_gpu_bytes_per_pixel(FlowParams())
     assert estimate_gpu_bytes_per_pixel(FlowParams(contrast_adapt=True)) > 100
