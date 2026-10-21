@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Dense optical-flow coregistration of remote sensing images: a Python library and the `gefolki` command line tool. Read `README.md` first. The default branch is `master`.
+Dense optical-flow coregistration of remote sensing images: a Python library and the `gefolki` command line tool. Read `README.md` first. The default branch is `master`. This repo is a fork of `aplyer/gefolki`, so give `gh` the repo: `gh pr create --repo peterwjacko/gefolki`.
 
 ## Project rules
 
